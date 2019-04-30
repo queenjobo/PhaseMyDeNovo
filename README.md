@@ -2,20 +2,6 @@
 
 Script to phase de novo SNVs to the maternal or paternal haplotype.
 
-### Method
-* Look for a nearby heterozygous variant within 1MB of the de novo SNV
-* Check the VCFs to see if the variant was inhertied from the mother or the father
-* Check the reads in the child CRAM file to and count the read if the de novo variant lies on the same or opposite haplotype as this variant. We count all four combinations:
-    * AA is the count of reads where the de novo alt is on the same read as the nearby het alt.
-    * AR is the count of reads where the de novo alt is on the same read as the nearby het ref.
-    * RA is the count of reads where the de novo ref is on the same read as the nearby het alt.
-    * RR is the count of reads where the de novo ref is on the same read as the nearby het ref. 
-* Determine phase using the following rules. 
-    * if (AA+RR)> 0 and (AR+RA) == 0, then de novo phases to the **same** parent as the nearby variant
-    * if (AA+RR)> 4 and (AR+RA) == 1, then de novo phases to the **same** parent as the nearby variant
-    * if (AR+RA)> 0 and (AA+RR) == 0, then de novo phases to the **different** parent as the nearby variant
-    * if (AR+RA)> 4 and (AA+RR) == 1, then de novo phases to the **different** parent as the nearby variant
-
 ```
 usage: phase_my_denovos.py [-h] [-dnmfile DNMFILE] [-id ID] [-outfile OUTFILE]
 
@@ -52,5 +38,17 @@ phase_var_alt - the alternative allele of the nearby variant
 AA_AR_read_support - evidence of read support for phasing: number of reads supporting that the variant is on the same haplotype as the de novo SNV and number of reads supporting that the variant is on the opposite haplotupe as the de novo SNV separated by a "|". Example 0|12  
 phase - what parent the de novo variant phases to either "F" for father or "M" for mother
 
-
+### Outline of Method
+* Look for a nearby heterozygous variant within 1MB of the de novo SNV
+* Check the VCFs to see if the variant was inhertied from the mother or the father
+* Check the reads in the child CRAM file to and count the read if the de novo variant lies on the same or opposite haplotype as this variant. We count all four combinations:
+    * AA is the count of reads where the de novo alt is on the same read as the nearby het alt.
+    * AR is the count of reads where the de novo alt is on the same read as the nearby het ref.
+    * RA is the count of reads where the de novo ref is on the same read as the nearby het alt.
+    * RR is the count of reads where the de novo ref is on the same read as the nearby het ref. 
+* Determine phase using the following rules. 
+    * if (AA+RR)> 0 and (AR+RA) == 0, then de novo phases to the **same** parent as the nearby variant
+    * if (AA+RR)> 4 and (AR+RA) == 1, then de novo phases to the **same** parent as the nearby variant
+    * if (AR+RA)> 0 and (AA+RR) == 0, then de novo phases to the **different** parent as the nearby variant
+    * if (AR+RA)> 4 and (AA+RR) == 1, then de novo phases to the **different** parent as the nearby variant
 
