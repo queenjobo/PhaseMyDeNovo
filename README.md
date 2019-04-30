@@ -17,7 +17,7 @@ optional arguments:
 
 The input file of de novos should have the following columns:
 
-id - individual id
+id - individual id  
 chrom - chromosome
 pos - genomic position
 ref - reference allele 
