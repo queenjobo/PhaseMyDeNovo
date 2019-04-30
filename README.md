@@ -1,6 +1,18 @@
 # PhaseMyDeNovo
-Script for phasing DNMs. The method is generally to look for a nearby heterozygous variant within 1MB of the de novo SNV. Check the VCFs to see if the variant was inhertied from the mother or the father. Then check the reads in the child CRAM file to see if the de novo variant lies on the same or opposite haplotype as this variant. 
-To determine phasing I currently use the following rules:
+
+Script to phase de novo SNVs to the maternal or paternal haplotype.
+
+### Method
+* Look for a nearby heterozygous variant within 1MB of the de novo SNV
+* Check the VCFs to see if the variant was inhertied from the mother or the father
+* Check the reads in the child CRAM file to and count the read if the de novo variant lies on the same or opposite haplotype as this variant. We count all four combinations:
+    * AA is the count of reads where the de novo alt is on the same read as the nearby het alt.
+    * AR is the count of reads where the de novo alt is on the same read as the nearby het ref.
+    * RA is the count of reads where the de novo ref is on the same read as the nearby het alt.
+    * RR is the count of reads where the de novo ref is on the same read as the nearby het ref. 
+* Determine phase using the following rules. 
+    * if (AA+RR)> 0 and (AR+RA) == 0, then de novo phases to the **same** parent as the nearby variant
+    * if (AR+RA)> 0 and (AA+RR) == 0, then de novo phases to the **different** parent as the nearby variant
 
 
 ```
