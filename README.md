@@ -12,8 +12,9 @@ Script to phase de novo SNVs to the maternal or paternal haplotype.
     * RR is the count of reads where the de novo ref is on the same read as the nearby het ref. 
 * Determine phase using the following rules. 
     * if (AA+RR)> 0 and (AR+RA) == 0, then de novo phases to the **same** parent as the nearby variant
+    * if (AA+RR)> 4 and (AR+RA) == 1, then de novo phases to the **same** parent as the nearby variant
     * if (AR+RA)> 0 and (AA+RR) == 0, then de novo phases to the **different** parent as the nearby variant
-
+    * if (AR+RA)> 4 and (AA+RR) == 1, then de novo phases to the **different** parent as the nearby variant
 
 ```
 usage: phase_my_denovos.py [-h] [-dnmfile DNMFILE] [-id ID] [-outfile OUTFILE]
@@ -27,7 +28,7 @@ optional arguments:
   -outfile OUTFILE  Output file path.
 ```
 
-### INPUT
+### Input File
 
 The input file of de novos should have the following columns:
 
@@ -40,7 +41,7 @@ vcfs - path to vcfs in the order of child vcf, father vcf, mother vcf separated 
 vcf_ids - list of sample IDs as they appear in the VCFs in the order of child sample id, father sample id, mother sample id separated by "|". Example 'sample2494|sample5792|sample9897'  
 cram - path to CRAM file for the child with the de novo mutation  
 
-### OUTPUT
+### Output File
 Note: only variants that were able to be phased are outputted.
 
 The output file of phased de novos will have all the original columns from the input file as well as:
