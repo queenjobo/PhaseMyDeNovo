@@ -13,5 +13,17 @@ optional arguments:
   -outfile OUTFILE  Output file path.
 ```
 
+###INPUT
+
 The input file of de novos should have the following columns:
 
+id - individual id
+chrom - chromosome
+pos - genomic position
+ref - reference allele 
+alt - alternatie allele
+vcfs - path to vcfs in the order of child vcf, father vcf, mother vcf separated by "|". Example: 'child.vcf.gz|father.vcf.gz|mother.vcf.gz'
+vcf_ids - list of sample IDs as they appear in the VCFs in the order of child sample id, father sample id, mother sample id separated by "|". Example 'sample2494|sample5792|sample9897'
+cram - path to CRAM file for the child with the de novo mutation
+
+###OUTPUT
