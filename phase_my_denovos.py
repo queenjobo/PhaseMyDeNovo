@@ -1,12 +1,9 @@
 '''
-Script to phase de novo mutations for 10k
-
 Joanna Kaplanis 
 24/04/2019
 
-DNMFILE = /nfs/ddd0/ks20/active_metaDNM_analyses/DDD_RUMC_GDX_denovos_filtered_31058_ntrios_2018_12_21.tab
 
-bsub -q long -R'select[mem>20000] rusage[mem=20000]' -M20000 -o phase.out python /nfs/users/nfs_j/jk18/PhD/ddd_denovo_enrichment/phasing/phase_denovos_v2.py -dnmfile /nfs/ddd0/ks20/active_metaDNM_analyses/DDD_RUMC_GDX_denovos_filtered_31058_ntrios_2018_12_21.tab
+Script to phase de novo SNVs using nearby het variants within 500bp 
 
 '''
 
@@ -19,14 +16,13 @@ import argparse
 import pandas as pd 
 from collections import defaultdict
 
-TRIO_INFO = "/nfs/ddd0/Data/datafreeze/ddd_data_releases/2017-12-15/trios_bams_vcfs.txt"
-BASE_QUAL_TH = 11
+#mapping quality threshold
 MAP_QUAL_TH = 20
 
 # FUNCTIONS --------------------------------
 
 def parse_args():
-    ''' parse arguments'''
+    ''' parse input arguments'''
     parser = argparse.ArgumentParser()
     parser.add_argument('-dnmfile',type = str, help = "file with de novos")
     parser.add_argument('-id',type = str, default = "", help = "id to subset to")
@@ -34,44 +30,42 @@ def parse_args():
     args = parser.parse_args()
     return(args)
 
-def get_files(id):
-    '''get ddd files '''
-    idvcf = ""
-    idcram = ""
-    mainids = ""
-    with open(TRIO_INFO,'r') as f:
-        for line in f:
-            fields = line.strip("\n").split("\t")
-            if id == fields[2]:
-                idvcf = fields[14]
-                idcram = "/lustre/scratch115/projects/ddd/EGA_submission/" + fields[5] + ".cram"
-                mainids = fields[5:8]
-                break
-    return(idvcf,idcram,mainids)
-
-def phase_my_dnm(mainids,pos,chrom,ref,alt,idvcf,idcram,window = 500):
-    ''' phase my de novo! '''
+def phase_my_dnm(vcf_ids,pos,chrom,ref,alt,vcfs,idcram,window = 500):
+    '''
+    Phase my de novo!
+    Returns numpy array with information about phase information for de novo SNV. 
+    '''
     allinfo = np.array([])
-    vcf_reader = vcf.Reader(filename=idvcf,compressed=True)
+    vcf_reader = vcf.Reader(filename=vcfs[0],compressed=True)
     records = vcf_reader.fetch(chrom,pos-window,pos+window)
     for record in records:
-        #is there a phasable het variant within 500bp?
-        if record.POS != pos and record.genotype(mainids[0]).is_het and not(record.genotype(mainids[1]).is_het and record.genotype(mainids[2]).is_het):
-            gt_phase = get_gt_phase(record,mainids)
+        print(record)
+        #is there a het variant within 500bp?
+        if record.is_snp and record.POS != pos and record.genotype(vcf_ids[0]).is_het:
+            #phase genotype
+            gt_phase = get_gt_phase(record,vcfs,vcf_ids)
+            # if genotype is phased then read phase in child CRAM file
             if gt_phase != "NA":
                 read_phase = get_read_phase(idcram,chrom,pos,ref,alt, record.POS, str(record.REF), str(record.ALT[0]))
+                #combine phase information from GT and read to get ultimate phase
                 myphase = combine_phase(gt_phase,read_phase)
+                #if phased then append info
                 if myphase != "NA":
                     #create list of info to return
                     info = np.array([str(record.POS), str(record.REF), str(record.ALT[0]), str(read_phase[0])+"|"+ str(read_phase[1]),myphase])
                     if allinfo.size != 0:
-                        np.core.defchararray.add(allinfo,info)
+                        wcomma = np.core.defchararray.add(allinfo,np.full(len(allinfo),',')
+                        allinfo = np.core.defchararray.add(wcomma,info)
                     else:
                         allinfo = info  
     return(allinfo)
 
 def combine_phase(gt_phase,read_phase):
-    '''get ultimate phase'''
+    '''
+    Combine information from the genotype phase of the nearby variant and the haplotype 
+    counts from the read phase to get the phase of the de novo SNV.
+    Returns F (father), M (mother) or NA (not able to phase)
+    '''
     same_phase = -1
     #if only one combination has >0 reads
     if read_phase[0] == 0 and read_phase[1] >0:
@@ -95,18 +89,34 @@ def combine_phase(gt_phase,read_phase):
         myphase = "NA"
     return(myphase)
         
+def get_variant_fromvcf(chrom,pos,vcf_path,sample):
+    ''' Extract variant from VCF'''
+    vcf_reader = vcf.Reader(filename=vcf_path,compressed=True)
+    records = vcf_reader.fetch(chrom,pos-1,pos)
+    variants = [record for record in records]
+    if len(variants) == 0:
+        record = None
+    else:
+        record = variants[0]
+    return(record)
 
-def get_gt_phase(record,mainids):
-    ''' phase genotype''' 
+def get_gt_phase(record,vcfs,vcf_ids):
+    '''
+    Phase het variant in child when give the variant record and paths to father/mother VCFs
+    Returns F (father), M (mother) or NA (not able to phase)
+    ''' 
     phase = "NA"
-    if record.genotype(mainids[1]).gt_type == 2:
-        phase = "F"
-    elif record.genotype(mainids[2]).gt_type == 2:
-        phase = "M" 
-    elif record.genotype(mainids[1]).gt_type == 1 and record.genotype(mainids[2]).gt_type == 0:
-        phase = "F"
-    elif record.genotype(mainids[2]).gt_type == 1 and record.genotype(mainids[1]).gt_type == 0:
-        phase = "M"
+    father_record = get_variant_fromvcf(record.CHROM,record.POS,vcfs[1],vcf_ids[1])
+    mother_record = get_variant_fromvcf(record.CHROM,record.POS,vcfs[2],vcf_ids[2])
+    if father_record is not None and mother_record is not None:
+        if father_record.genotype(vcf_ids[1]).gt_type == 2:
+            phase = "F"
+        elif mother_record.genotype(vcf_ids[2]).gt_type == 2:
+            phase = "M" 
+        elif father_record.genotype(vcf_ids[1]).gt_type == 1 and mother_record.genotype(vcf_ids[2]).gt_type == 0:
+            phase = "F"
+        elif mother_record.genotype(vcf_ids[2]).gt_type == 1 and father_record.genotype(vcf_ids[1]).gt_type == 0:
+            phase = "M"
     return(phase)
 
 def read_pair_generator(bam,chrom,start,stop):
@@ -116,7 +126,7 @@ def read_pair_generator(bam,chrom,start,stop):
     '''
     read_dict = defaultdict(lambda: [None, None])
     for read in bam.fetch(chrom,start,stop):
-        if not read.is_proper_pair or read.is_secondary or read.is_supplementary:
+        if not read.is_proper_pair or read.is_secondary or read.is_supplementary or read.is_duplicate:
             continue
         qname = read.query_name
         if qname not in read_dict:
@@ -133,17 +143,22 @@ def read_pair_generator(bam,chrom,start,stop):
 
 def get_base_quality(read, position):
     '''given pysam read and position extract base quality '''
-    bq = read.query_qualities[position - read.reference_start -1]
+    fullpos = read.get_reference_positions(full_length = True)
+    bq = read.query_qualities[fullpos.index(position) -1]
     return(bq)
 
 
 def get_base(read, position):
     '''given pysam read and position extract base'''
-    base = read.query_sequence[position - read.reference_start -1]
+    fullpos = read.get_reference_positions(full_length = True)
+    base = read.query_sequence[fullpos.index(position) -1]
     return(base)
 
 def get_base_combo(read1,read2,dnm_pos,var_pos):
-    ''' given reads and positions extract base phase on read '''
+    ''' 
+    Given paired reads and positions extract base phase on reads.
+    Returns a string of the haplotype combination in the order de novo mutation and nearby variant.
+    '''
     com = ""
     #get positions in read
     read1pos = read1.get_reference_positions()
@@ -151,23 +166,22 @@ def get_base_combo(read1,read2,dnm_pos,var_pos):
     #check if dnm and variant are in same read pair and get corresponding bases
     if dnm_pos in read1pos:
         if var_pos in read1pos:
-            if get_base_quality(read1,dnm_pos) > BASE_QUAL_TH and get_base_quality(read1,var_pos) > BASE_QUAL_TH:
                 com = get_base(read1,dnm_pos) + get_base(read1,var_pos)
         elif var_pos in read2pos:
-            if get_base_quality(read1,dnm_pos) > BASE_QUAL_TH and get_base_quality(read2,var_pos) > BASE_QUAL_TH:
                 com = get_base(read1,dnm_pos) + get_base(read2,var_pos)
     elif dnm_pos in read2pos:
         if var_pos in read2pos:
-            if get_base_quality(read2,dnm_pos) > BASE_QUAL_TH and get_base_quality(read2,var_pos) > BASE_QUAL_TH:
                 com = get_base(read2,dnm_pos) + get_base(read2,var_pos)
         elif var_pos in read1pos:
-            if get_base_quality(read2,dnm_pos) > BASE_QUAL_TH and get_base_quality(read1,var_pos) > BASE_QUAL_TH:
                 com = get_base(read2,dnm_pos) + get_base(read1,var_pos)
     return(com)
 
 def count_phases(coms, dnm_ref,dnm_alt,var_ref,var_alt):
     '''
-    Count haplotyples of counts
+    Count haplotyples of counts.
+    Returns a list of two numbers the first is the number of reads indicating the de novo 
+    lies on the same haplotype as the variant. The second is the number of reads indicating
+    the de novo lies on the opposite haplotype to the variant.
     '''
     rr = coms.count(dnm_ref+var_ref)
     ra = coms.count(dnm_ref+var_alt)
@@ -179,7 +193,7 @@ def count_phases(coms, dnm_ref,dnm_alt,var_ref,var_alt):
            
 def get_read_phase(idcram,chrom,dnm_pos,dnm_ref,dnm_alt,var_pos,var_ref,var_alt):
     '''
-    Get read phase given the cram file, chrom, de novo position and phasable variant position
+    Get read phase given the CRMAM file for the child, chrom, de novo position and het variant position
     '''
     #create start and end to pull from cram file
     if dnm_pos > var_pos:
@@ -201,6 +215,7 @@ def get_read_phase(idcram,chrom,dnm_pos,dnm_ref,dnm_alt,var_pos,var_ref,var_alt)
         if len(com) > 0:
             coms = coms + [com]
     samfile.close()
+    #count haplotype combinations
     counts = count_phases(coms, dnm_ref,dnm_alt,var_ref,var_alt)
     return(counts)
 
@@ -208,21 +223,24 @@ def main():
     args = parse_args()
     dnms  = pd.read_csv(args.dnmfile,sep = "\t")
     with open(args.outfile,'w') as f:
-        myheader = "\t".join(dnms.columns.tolist()+ ["phase_var_pos","phase_var_ref","phase_var_alt","AA|AR_read_support","phase"])+"\n"
+        myheader = "\t".join(dnms.columns.tolist()+ ["phase_var_pos","phase_var_ref","phase_var_alt","AA_AR_read_support","phase"])+"\n"
         f.write(myheader)
-        #print header here
         if len(args.id) > 0:
             dnms = dnms[dnms.id == args.id]
         for id in dnms.id.unique():
             idnms = dnms[dnms.id == id]
-            idvcf, idcram, mainids = get_files(id)
-            if idvcf == "":
-                continue
             for index,row in idnms.iterrows():
-                info = phase_my_dnm(mainids,int(row.pos),row.chrom,row.ref,row.alt,idvcf,idcram)
-                if len(info) > 0:
-                    myline = "\t".join(list(map(str,list(row))) + list(info)) + "\n"
-                    f.write(myline)
+                #only phasing SNPs
+                if len(row.ref) == 1 and len(row.alt) == 1:
+                    #parse vcf input
+                    vcfs = row.vcfs.split("|")
+                    vcf_ids = row.vcf_ids.split("|")
+                    #phase
+                    info = phase_my_dnm(vcf_ids,int(row.pos),row.chrom,row.ref,row.alt,vcfs,row.cram)
+                    #write phased dnms to file
+                    if len(info) > 0:
+                        myline = "\t".join(list(map(str,list(row))) + list(info)) + "\n"
+                        f.write(myline)
 
         
 
