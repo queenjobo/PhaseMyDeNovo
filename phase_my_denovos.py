@@ -24,9 +24,9 @@ MAP_QUAL_TH = 20
 def parse_args():
     ''' parse input arguments'''
     parser = argparse.ArgumentParser()
-    parser.add_argument('-dnmfile',type = str, help = "file with de novos")
-    parser.add_argument('-id',type = str, default = "", help = "id to subset to")
-    parser.add_argument('-outfile',type = str, default = "phased_output.tab",help = "output file path")
+    parser.add_argument('-dnmfile',type = str, help = "Tab file with de novo mutations to phase. Must contain the following columns: id,chrom,pos,ref,alt,vcfs,vcf_ids,cram")
+    parser.add_argument('-id',type = str, default = "", help = "String of ID to subset file to if only want to phase variants from a specific individual.")
+    parser.add_argument('-outfile',type = str, default = "my_phased_denovos.tab",help = "Output file path.")
     args = parser.parse_args()
     return(args)
 
@@ -54,7 +54,7 @@ def phase_my_dnm(vcf_ids,pos,chrom,ref,alt,vcfs,idcram,window = 500):
                     #create list of info to return
                     info = np.array([str(record.POS), str(record.REF), str(record.ALT[0]), str(read_phase[0])+"|"+ str(read_phase[1]),myphase])
                     if allinfo.size != 0:
-                        wcomma = np.core.defchararray.add(allinfo,np.full(len(allinfo),',')
+                        wcomma = np.core.defchararray.add(allinfo,np.full(len(allinfo),','))
                         allinfo = np.core.defchararray.add(wcomma,info)
                     else:
                         allinfo = info  
