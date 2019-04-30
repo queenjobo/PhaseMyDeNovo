@@ -13,7 +13,7 @@ optional arguments:
   -outfile OUTFILE  Output file path.
 ```
 
-###INPUT
+### INPUT
 
 The input file of de novos should have the following columns:
 
@@ -26,4 +26,8 @@ vcfs - path to vcfs in the order of child vcf, father vcf, mother vcf separated 
 vcf_ids - list of sample IDs as they appear in the VCFs in the order of child sample id, father sample id, mother sample id separated by "|". Example 'sample2494|sample5792|sample9897'
 cram - path to CRAM file for the child with the de novo mutation
 
-###OUTPUT
+### OUTPUT
+Note: only variants that were able to be phased are outputted.
+
+The output file of phased de novos will have all the original columns from the input file as well as:
+
