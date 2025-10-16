@@ -47,8 +47,8 @@ phase - what parent the de novo variant phases to either "F" for father or "M" f
     * RA is the count of reads where the de novo ref is on the same read as the nearby het alt.
     * RR is the count of reads where the de novo ref is on the same read as the nearby het ref. 
 * Determine phase using the following rules. 
-    * if (AA+RR)> 0 and (AR+RA) == 0, then de novo phases to the **same** parent as the nearby variant
+    * if (AA+RR)> 1 and (AR+RA) == 0, then de novo phases to the **same** parent as the nearby variant
     * if (AA+RR)> 4 and (AR+RA) == 1, then de novo phases to the **same** parent as the nearby variant
-    * if (AR+RA)> 0 and (AA+RR) == 0, then de novo phases to the **different** parent as the nearby variant
+    * if (AR+RA)> 1 and (AA+RR) == 0, then de novo phases to the **different** parent as the nearby variant
     * if (AR+RA)> 4 and (AA+RR) == 1, then de novo phases to the **different** parent as the nearby variant
 
