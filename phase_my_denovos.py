@@ -188,7 +188,7 @@ def count_phases(coms, dnm_ref,dnm_alt,var_ref,var_alt):
     aa = coms.count(dnm_alt+var_alt)
     ar = coms.count(dnm_alt+var_ref)
     same = rr +aa
-    diff = ar + ar
+    diff = ar + ra
     return([same,diff])
            
 def get_read_phase(idcram,chrom,dnm_pos,dnm_ref,dnm_alt,var_pos,var_ref,var_alt):
