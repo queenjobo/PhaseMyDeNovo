@@ -13,8 +13,6 @@ MODIFIED (vs original 16/10/2025):
 - When multiple nearby het variants support phasing, resolve *after flipping*
   (i.e. after combine_phase) and leave unphased if there is strong conflicting
   evidence between paternal and maternal assignments.
-
-EVIDENCE OUTPUT:
 - Only output evidence for variants that PASS combine_phase (i.e. dnm_parent is F or M)
 - Two new columns:
     - phase_all: comma-separated list of F/M calls for each passing variant
@@ -22,6 +20,7 @@ EVIDENCE OUTPUT:
   (Ordering is the order encountered in the VCF fetch window.)
 
 Conflict thresholds (only applied when BOTH an F-supported and M-supported call exist):
+
 
 GK: Added patches to work with GMS data in GEL
 """
@@ -306,4 +305,205 @@ def get_gt_phase(record_child, vcfs, vcf_ids):
     """
     Determine whether the child's het variant ALT is from father or mother:
       - If parent is hom-alt: assign to that parent.
-      - If one parent het, the other hom-
+      - If one parent het, the other hom-ref: assign to the het parent.
+    Returns 'F', 'M', or 'NA'.
+    """
+    phase = "NA"
+    father_record = get_variant_fromvcf(record_child.chrom, record_child.pos, vcfs[1])
+    mother_record = get_variant_fromvcf(record_child.chrom, record_child.pos, vcfs[2])
+
+    if father_record is None or mother_record is None:
+        return phase
+
+    f_call = father_record.samples.get(vcf_ids[1])
+    m_call = mother_record.samples.get(vcf_ids[2])
+    if f_call is None or m_call is None:
+        return phase
+
+    if _is_hom_alt(f_call):
+        phase = "F"
+    elif _is_hom_alt(m_call):
+        phase = "M"
+    elif _is_het(f_call) and _is_hom_ref(m_call):
+        phase = "F"
+    elif _is_het(m_call) and _is_hom_ref(f_call):
+        phase = "M"
+    return phase
+
+def read_pair_generator(bam, chrom, start, stop):
+    """
+    Generate proper read pairs within region.
+    """
+    read_dict = defaultdict(lambda: [None, None])
+    for read in bam.fetch(chrom, start, stop):
+        if (not read.is_proper_pair
+            or read.is_secondary
+            or read.is_supplementary
+            or read.is_duplicate):
+            continue
+        qname = read.query_name
+        if qname not in read_dict:
+            if read.is_read1:
+                read_dict[qname][0] = read
+            else:
+                read_dict[qname][1] = read
+        else:
+            if read.is_read1:
+                mate = read_dict[qname][1]
+                if mate is not None:
+                    yield read, mate
+            else:
+                mate = read_dict[qname][0]
+                if mate is not None:
+                    yield mate, read
+            del read_dict[qname]
+
+def _base_at_refpos(read, position):
+    """
+    Get the read base aligned to a given reference position.
+    Assumes 'position' is present in read.reference_positions.
+    """
+    refpos = read.get_reference_positions(full_length=True)
+    idx = refpos.index(position)  # 0-based index
+    return read.query_sequence[idx]
+
+def get_base_combo(read1, read2, dnm_pos, var_pos):
+    """
+    Return haplotype combo (dnm+var) from the pair if both positions are covered.
+    dnm_pos and var_pos must be 0-based reference positions (pysam convention).
+    """
+    com = ""
+    r1pos = set(read1.get_reference_positions())
+    r2pos = set(read2.get_reference_positions())
+
+    if dnm_pos in r1pos:
+        if var_pos in r1pos:
+            com = _base_at_refpos(read1, dnm_pos) + _base_at_refpos(read1, var_pos)
+        elif var_pos in r2pos:
+            com = _base_at_refpos(read1, dnm_pos) + _base_at_refpos(read2, var_pos)
+    elif dnm_pos in r2pos:
+        if var_pos in r2pos:
+            com = _base_at_refpos(read2, dnm_pos) + _base_at_refpos(read2, var_pos)
+        elif var_pos in r1pos:
+            com = _base_at_refpos(read2, dnm_pos) + _base_at_refpos(read1, var_pos)
+    return com
+
+def count_phases(coms, dnm_ref, dnm_alt, var_ref, var_alt):
+    """
+    Return [same, diff] haplotype read counts.
+      same = RR + AA
+      diff = AR + RA
+    """
+    rr = coms.count(dnm_ref + var_ref)
+    ra = coms.count(dnm_ref + var_alt)
+    aa = coms.count(dnm_alt + var_alt)
+    ar = coms.count(dnm_alt + var_ref)
+    same = rr + aa
+    diff = ar + ra
+    return [same, diff]
+
+def get_read_phase(idcram, chrom, dnm_pos, dnm_ref, dnm_alt, var_pos, var_ref, var_alt, reference=None):
+    """
+    Read-backed phase from child CRAM around the two positions.
+
+    Inputs dnm_pos/var_pos are 1-based (VCF). Internally convert to 0-based to match pysam read coordinates.
+    """
+    dnm0 = dnm_pos - 1
+    var0 = var_pos - 1
+
+    start0 = min(dnm0, var0)
+    end0 = max(dnm0, var0) + 1  # half-open end for pysam
+
+    if reference:
+        samfile = pysam.AlignmentFile(idcram, "rc", reference_filename=reference)
+    else:
+        samfile = pysam.AlignmentFile(idcram, "rc")
+
+    coms = []
+    try:
+        for read1, read2 in read_pair_generator(samfile, chrom, start0, end0):
+            if (read1.mapping_quality is None or read2.mapping_quality is None
+                or read1.mapping_quality <= MAP_QUAL_TH
+                or read2.mapping_quality <= MAP_QUAL_TH):
+                continue
+
+            com = get_base_combo(read1, read2, dnm0, var0)  # 0-based
+            if com:
+                coms.append(com)
+    finally:
+        samfile.close()
+
+    return count_phases(coms, dnm_ref, dnm_alt, var_ref, var_alt)
+
+def main():
+    args = parse_args()
+    dnms = pd.read_csv(args.dnmfile, sep="\t")
+
+    with open(args.outfile, "w") as f:
+        extra_cols = [
+            "phase_var_pos", "phase_var_ref", "phase_var_alt",
+            "AA_AR_read_support", "phase",
+            "phase_all", "AA_AR_all",
+            "phased", "unphased_reason",
+            "n_window_snps", "n_child_het", "n_gt_phase_ok", "n_read_combo_tested",
+            "best_var_pos", "best_same", "best_diff",
+        ]
+        myheader = "\t".join(dnms.columns.tolist() + extra_cols) + "\n"
+        f.write(myheader)
+
+        if len(args.id) > 0:
+            dnms = dnms[dnms.id == args.id]
+
+        for id_ in dnms.id.unique():
+            idnms = dnms[dnms.id == id_]
+            for _, row in idnms.iterrows():
+                phased_info = np.array([])
+                reason = "UNPHASED_NOT_A_SNP_DNM"
+                phase_all = "NA"
+                aa_ar_all = "NA"
+                stats = {
+                    "n_window_snps": "0",
+                    "n_child_het": "0",
+                    "n_gt_phase_ok": "0",
+                    "n_read_combo_tested": "0",
+                    "best_var_pos": "NA",
+                    "best_same": "NA",
+                    "best_diff": "NA",
+                }
+
+                if len(str(row.ref)) == 1 and len(str(row.alt)) == 1:
+                    vcfs = row.vcfs.split("|")
+                    vcf_ids = row.vcf_ids.split("|")
+                    phased_info, reason, stats, phase_all, aa_ar_all = phase_my_dnm(
+                        vcf_ids, int(row.pos), row.chrom, row.ref, row.alt, vcfs, row.cram,
+                        reference=args.reference
+                    )
+
+                if phased_info.size > 0:
+                    phase_fields = list(phased_info)  # 5 fields
+                    phased_flag = "1"
+                    print("Phased DNM:", ":".join(f"{x}" for x in [row.chrom, row.pos, row.ref, row.alt]))
+                else:
+                    phase_fields = ["NA", "NA", "NA", "NA", "NA"]
+                    phased_flag = "0"
+
+                out_fields = (
+                    list(map(str, list(row)))
+                    + phase_fields
+                    + [phase_all, aa_ar_all]
+                    + [
+                        phased_flag,
+                        reason,
+                        stats["n_window_snps"],
+                        stats["n_child_het"],
+                        stats["n_gt_phase_ok"],
+                        stats["n_read_combo_tested"],
+                        stats["best_var_pos"],
+                        stats["best_same"],
+                        stats["best_diff"],
+                    ]
+                )
+                f.write("\t".join(out_fields) + "\n")
+
+if __name__ == "__main__":
+    main()
