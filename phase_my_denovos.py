@@ -9,6 +9,8 @@ MODIFIED:
 - Always outputs one row per DNM (phased or not).
 - Adds columns explaining why a site was not phased + simple counters.
 - phase_my_dnm now returns (info, reason, stats).
+
+GK: Added patches to work with GMS data in GEL
 """
 
 # IMPORTS ----------------------------------
@@ -24,8 +26,10 @@ MAP_QUAL_TH = 20
 # ------------ Helpers  ------------
 def _is_snp(rec):
     # Single-alt SNP only
+    # fix to deal with `x,<NON_REF>` alt alleles
+    alts = [a for a in (rec.alts or []) if not a.startswith("<")]
     return (
-        len(rec.alts or []) == 1
+        len(alts) == 1
         and len(rec.ref) == 1
         and len(rec.alts[0]) == 1
     )
@@ -47,7 +51,7 @@ def _is_hom_ref(sample_call):
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "-dnmfile", type=str,
+        "-dnmfile", '-i', type=str,
         help="Tab file of de novo mutations to phase. Columns: id,chrom,pos,ref,alt,vcfs,vcf_ids,cram"
     )
     parser.add_argument(
@@ -113,9 +117,10 @@ def phase_my_dnm(vcf_ids, pos, chrom, ref, alt, vcfs, idcram, window=500, refere
             stats["n_gt_phase_ok"] += 1
 
             # read-backed phasing in child CRAM
+            alt_vcf = [a for a in (record.alts or []) if not a.startswith("<")][0]
             read_phase = get_read_phase(
                 idcram, chrom, pos, ref, alt,
-                record.pos, record.ref, record.alts[0],
+                record.pos, record.ref, alt_vcf,
                 reference=reference
             )
             stats["n_read_combo_tested"] += 1
@@ -268,6 +273,7 @@ def _base_at_refpos(read, position):
 def get_base_combo(read1, read2, dnm_pos, var_pos):
     """
     Return haplotype combo (dnm+var) from the pair if both positions are covered.
+    dnm_pos and var_pos must be 0-based reference positions (pysam convention).
     """
     com = ""
     r1pos = set(read1.get_reference_positions())
@@ -302,9 +308,14 @@ def count_phases(coms, dnm_ref, dnm_alt, var_ref, var_alt):
 def get_read_phase(idcram, chrom, dnm_pos, dnm_ref, dnm_alt, var_pos, var_ref, var_alt, reference=None):
     """
     Read-backed phase from child CRAM around the two positions.
+
+    Inputs dnm_pos/var_pos are 1-based (VCF). Internally convert to 0-based to match pysam read coordinates.
     """
-    start = min(dnm_pos, var_pos)
-    end = max(dnm_pos, var_pos)
+    dnm0 = dnm_pos - 1
+    var0 = var_pos - 1
+
+    start0 = min(dnm0, var0)
+    end0 = max(dnm0, var0) + 1  # half-open end for pysam
 
     if reference:
         samfile = pysam.AlignmentFile(idcram, "rc", reference_filename=reference)
@@ -313,13 +324,13 @@ def get_read_phase(idcram, chrom, dnm_pos, dnm_ref, dnm_alt, var_pos, var_ref, v
 
     coms = []
     try:
-        for read1, read2 in read_pair_generator(samfile, chrom, start - 1, end):
-            # skip if either read is low MQ
+        for read1, read2 in read_pair_generator(samfile, chrom, start0, end0):
             if (read1.mapping_quality is None or read2.mapping_quality is None
                 or read1.mapping_quality <= MAP_QUAL_TH
                 or read2.mapping_quality <= MAP_QUAL_TH):
                 continue
-            com = get_base_combo(read1, read2, dnm_pos, var_pos)
+
+            com = get_base_combo(read1, read2, dnm0, var0)  # NOTE: now 0-based
             if com:
                 coms.append(com)
     finally:
@@ -372,6 +383,7 @@ def main():
                 if phased_info.size > 0:
                     phase_fields = list(phased_info)  # 5 fields
                     phased_flag = "1"
+                    print('Phased DNM:', ':'.join(f'{x}' for x in [row.chrom, row.pos, row.ref, row.alt]))
                 else:
                     phase_fields = ["NA", "NA", "NA", "NA", "NA"]
                     phased_flag = "0"
