@@ -1,13 +1,15 @@
-'''
-Joanna Kaplanis 
-16/10/2025
-
+#!/usr/bin/env python3
+"""
+Joanna Kaplanis
+06/01/2026
 
 Script to phase de novo SNVs using nearby het variants
 
-'''
-
-#!/usr/bin/env python3
+MODIFIED:
+- Always outputs one row per DNM (phased or not).
+- Adds columns explaining why a site was not phased + simple counters.
+- phase_my_dnm now returns (info, reason, stats).
+"""
 
 # IMPORTS ----------------------------------
 import pysam
@@ -21,7 +23,7 @@ MAP_QUAL_TH = 20
 
 # ------------ Helpers  ------------
 def _is_snp(rec):
-    # Single-alt SNP only 
+    # Single-alt SNP only
     return (
         len(rec.alts or []) == 1
         and len(rec.ref) == 1
@@ -65,13 +67,29 @@ def parse_args():
 def phase_my_dnm(vcf_ids, pos, chrom, ref, alt, vcfs, idcram, window=500, reference=None):
     """
     Phase a de novo SNV using a nearby heterozygous variant.
-    Returns a numpy array of strings to append to the output row.
+
+    Returns:
+      allinfo: numpy array of strings (length 5) if phased else empty array
+      reason: 'PHASED' or an UNPHASED_* reason
+      stats: dict of counters / best-evidence summary
     """
     allinfo = np.array([])
+
+    stats = {
+        "n_window_snps": 0,
+        "n_child_het": 0,
+        "n_gt_phase_ok": 0,
+        "n_read_combo_tested": 0,
+        "best_var_pos": "NA",
+        "best_same": "NA",
+        "best_diff": "NA",
+    }
 
     # pysam VariantFile.fetch uses 0-based, half-open intervals
     start = max(0, pos - 1 - window)
     end = pos + window
+
+    reason = "UNKNOWN"
 
     with pysam.VariantFile(vcfs[0]) as vcf_child:
         for record in vcf_child.fetch(chrom, start, end):
@@ -79,14 +97,20 @@ def phase_my_dnm(vcf_ids, pos, chrom, ref, alt, vcfs, idcram, window=500, refere
                 continue
             if record.pos == pos:
                 continue  # skip the DNM itself
+
+            stats["n_window_snps"] += 1
+
             child_call = record.samples.get(vcf_ids[0])
             if child_call is None or not _is_het(child_call):
                 continue
+            stats["n_child_het"] += 1
 
             # phase genotype against parents
             gt_phase = get_gt_phase(record, vcfs, vcf_ids)
             if gt_phase == "NA":
+                reason = "UNPHASED_NO_PARENTS_GT_PHASE"
                 continue
+            stats["n_gt_phase_ok"] += 1
 
             # read-backed phasing in child CRAM
             read_phase = get_read_phase(
@@ -94,6 +118,22 @@ def phase_my_dnm(vcf_ids, pos, chrom, ref, alt, vcfs, idcram, window=500, refere
                 record.pos, record.ref, record.alts[0],
                 reference=reference
             )
+            stats["n_read_combo_tested"] += 1
+
+            same, diff = read_phase
+            # Track "best" evidence (by total informative read pairs) even if inconclusive
+            if stats["best_same"] == "NA":
+                stats["best_same"] = same
+                stats["best_diff"] = diff
+                stats["best_var_pos"] = record.pos
+            else:
+                prev_total = int(stats["best_same"]) + int(stats["best_diff"])
+                new_total = same + diff
+                if new_total > prev_total:
+                    stats["best_same"] = same
+                    stats["best_diff"] = diff
+                    stats["best_var_pos"] = record.pos
+
             myphase = combine_phase(gt_phase, read_phase)
             if myphase != "NA":
                 info = np.array([
@@ -103,12 +143,31 @@ def phase_my_dnm(vcf_ids, pos, chrom, ref, alt, vcfs, idcram, window=500, refere
                     f"{read_phase[0]}|{read_phase[1]}",
                     myphase
                 ])
-                if allinfo.size != 0:
-                    wcomma = np.core.defchararray.add(allinfo, np.full(len(allinfo), ","))
-                    allinfo = np.core.defchararray.add(wcomma, info)
-                else:
-                    allinfo = info
-    return allinfo
+                allinfo = info
+                reason = "PHASED"
+                break
+
+    # If not phased, choose the most specific reason based on counters
+    if reason != "PHASED":
+        if stats["n_window_snps"] == 0:
+            reason = "UNPHASED_NO_NEARBY_SNPS_IN_WINDOW"
+        elif stats["n_child_het"] == 0:
+            reason = "UNPHASED_NO_CHILD_HET_NEARBY"
+        elif stats["n_gt_phase_ok"] == 0:
+            reason = "UNPHASED_NO_PARENTS_GT_PHASE"
+        else:
+            reason = "UNPHASED_INSUFFICIENT_READ_SUPPORT"
+
+    # Ensure best_same/diff are strings for writing later
+    stats["n_window_snps"] = str(stats["n_window_snps"])
+    stats["n_child_het"] = str(stats["n_child_het"])
+    stats["n_gt_phase_ok"] = str(stats["n_gt_phase_ok"])
+    stats["n_read_combo_tested"] = str(stats["n_read_combo_tested"])
+    stats["best_same"] = str(stats["best_same"])
+    stats["best_diff"] = str(stats["best_diff"])
+    stats["best_var_pos"] = str(stats["best_var_pos"])
+
+    return allinfo, reason, stats
 
 def combine_phase(gt_phase, read_phase):
     """
@@ -203,7 +262,7 @@ def _base_at_refpos(read, position):
     Assumes 'position' is present in read.reference_positions.
     """
     refpos = read.get_reference_positions(full_length=True)
-    idx = refpos.index(position)  # 0-based index; no -1
+    idx = refpos.index(position)  # 0-based index
     return read.query_sequence[idx]
 
 def get_base_combo(read1, read2, dnm_pos, var_pos):
@@ -271,11 +330,16 @@ def get_read_phase(idcram, chrom, dnm_pos, dnm_ref, dnm_alt, var_pos, var_ref, v
 def main():
     args = parse_args()
     dnms = pd.read_csv(args.dnmfile, sep="\t")
+
     with open(args.outfile, "w") as f:
-        myheader = "\t".join(
-            dnms.columns.tolist()
-            + ["phase_var_pos", "phase_var_ref", "phase_var_alt", "AA_AR_read_support", "phase"]
-        ) + "\n"
+        extra_cols = [
+            "phase_var_pos", "phase_var_ref", "phase_var_alt",
+            "AA_AR_read_support", "phase",
+            "phased", "unphased_reason",
+            "n_window_snps", "n_child_het", "n_gt_phase_ok", "n_read_combo_tested",
+            "best_var_pos", "best_same", "best_diff",
+        ]
+        myheader = "\t".join(dnms.columns.tolist() + extra_cols) + "\n"
         f.write(myheader)
 
         if len(args.id) > 0:
@@ -284,17 +348,50 @@ def main():
         for id_ in dnms.id.unique():
             idnms = dnms[dnms.id == id_]
             for _, row in idnms.iterrows():
-                # only phasing SNP DNMs
-                if len(row.ref) == 1 and len(row.alt) == 1:
+                # only attempt phasing SNP DNMs; still output row even if not attempted
+                phased_info = np.array([])
+                reason = "UNPHASED_NOT_A_SNP_DNM"
+                stats = {
+                    "n_window_snps": "0",
+                    "n_child_het": "0",
+                    "n_gt_phase_ok": "0",
+                    "n_read_combo_tested": "0",
+                    "best_var_pos": "NA",
+                    "best_same": "NA",
+                    "best_diff": "NA",
+                }
+
+                if len(str(row.ref)) == 1 and len(str(row.alt)) == 1:
                     vcfs = row.vcfs.split("|")
                     vcf_ids = row.vcf_ids.split("|")
-                    info = phase_my_dnm(
+                    phased_info, reason, stats = phase_my_dnm(
                         vcf_ids, int(row.pos), row.chrom, row.ref, row.alt, vcfs, row.cram,
                         reference=args.reference
                     )
-                    if info.size > 0:
-                        myline = "\t".join(list(map(str, list(row))) + list(info)) + "\n"
-                        f.write(myline)
+
+                if phased_info.size > 0:
+                    phase_fields = list(phased_info)  # 5 fields
+                    phased_flag = "1"
+                else:
+                    phase_fields = ["NA", "NA", "NA", "NA", "NA"]
+                    phased_flag = "0"
+
+                out_fields = (
+                    list(map(str, list(row)))
+                    + phase_fields
+                    + [
+                        phased_flag,
+                        reason,
+                        stats["n_window_snps"],
+                        stats["n_child_het"],
+                        stats["n_gt_phase_ok"],
+                        stats["n_read_combo_tested"],
+                        stats["best_var_pos"],
+                        stats["best_same"],
+                        stats["best_diff"],
+                    ]
+                )
+                f.write("\t".join(out_fields) + "\n")
 
 if __name__ == "__main__":
     main()
