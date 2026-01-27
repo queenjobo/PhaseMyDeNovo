@@ -358,50 +358,36 @@ def read_pair_generator(bam, chrom, start, stop):
                     yield mate, read
             del read_dict[qname]
 
-# -------------------------
-# CHANGED HERE: base lookup
-# -------------------------
-def _base_at_refpos(read, refpos0):
+def _base_at_refpos(read, position):
     """
-    Return the base aligned to 0-based reference position in reference-forward orientation.
-    Returns None if the read has no aligned base at that reference position (e.g. deletion/refskip).
+    Get the read base aligned to a given reference position.
+    Assumes 'position' is present in read.reference_positions.
     """
-    seq = read.get_forward_sequence()  # reference-forward orientation (matches IGV/VCF)
-    for qpos, rpos in read.get_aligned_pairs(matches_only=False):
-        if rpos == refpos0:
-            if qpos is None:
-                return None
-            return seq[qpos]
-    return None
+    refpos = read.get_reference_positions(full_length=True)
+    idx = refpos.index(position)  # 0-based index
+    return read.query_sequence[idx]
 
-# -------------------------
-# CHANGED HERE: build combo
-# -------------------------
-def get_base_combo(read1, read2, dnm_pos0, var_pos0):
+def get_base_combo(read1, read2, dnm_pos, var_pos):
     """
     Return haplotype combo (dnm+var) from the pair if both positions are covered.
-    dnm_pos0 and var_pos0 must be 0-based reference positions.
-    Uses robust refpos->querypos mapping and reference-forward bases.
+    dnm_pos and var_pos must be 0-based reference positions (pysam convention).
     """
-    b11 = _base_at_refpos(read1, dnm_pos0)
-    b12 = _base_at_refpos(read1, var_pos0)
-    b21 = _base_at_refpos(read2, dnm_pos0)
-    b22 = _base_at_refpos(read2, var_pos0)
+    com = ""
+    r1pos = set(read1.get_reference_positions())
+    r2pos = set(read2.get_reference_positions())
 
-    # Both on read1
-    if b11 is not None and b12 is not None:
-        return b11 + b12
-    # Both on read2
-    if b21 is not None and b22 is not None:
-        return b21 + b22
-    # Across mates
-    if b11 is not None and b22 is not None:
-        return b11 + b22
-    if b21 is not None and b12 is not None:
-        return b21 + b12
+    if dnm_pos in r1pos:
+        if var_pos in r1pos:
+            com = _base_at_refpos(read1, dnm_pos) + _base_at_refpos(read1, var_pos)
+        elif var_pos in r2pos:
+            com = _base_at_refpos(read1, dnm_pos) + _base_at_refpos(read2, var_pos)
+    elif dnm_pos in r2pos:
+        if var_pos in r2pos:
+            com = _base_at_refpos(read2, dnm_pos) + _base_at_refpos(read2, var_pos)
+        elif var_pos in r1pos:
+            com = _base_at_refpos(read2, dnm_pos) + _base_at_refpos(read1, var_pos)
+    return com
 
-    return ""
-  
 def count_phases(coms, dnm_ref, dnm_alt, var_ref, var_alt):
     """
     Return [same, diff] haplotype read counts.
