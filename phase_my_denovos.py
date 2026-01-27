@@ -365,7 +365,8 @@ def _base_at_refpos(read, position):
     """
     refpos = read.get_reference_positions(full_length=True)
     idx = refpos.index(position)  # 0-based index
-    return read.query_sequence[idx]
+    seq = read.get_forward_sequence()  # <-- change from query_sequence
+    return seq[idx]
 
 def get_base_combo(read1, read2, dnm_pos, var_pos):
     """
