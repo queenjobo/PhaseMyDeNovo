@@ -436,8 +436,30 @@ def get_read_phase(idcram, chrom, dnm_pos, dnm_ref, dnm_alt, var_pos, var_ref, v
     return count_phases(coms, dnm_ref, dnm_alt, var_ref, var_alt)
 
 def main():
-    args = parse_args()
-    dnms = pd.read_csv(args.dnmfile, sep="\t")
+  args = parse_args()
+  EXPECTED_COLS = ["id", "chrom", "pos", "ref", "alt", "vcfs", "vcf_ids", "cram"]
+  
+  with open(args.dnmfile) as fh:
+    first = fh.readline().lstrip("\ufeff").rstrip("\n").split("\t")
+    first = [c.strip() for c in first]
+    has_header = set(EXPECTED_COLS).issubset(first)
+  if has_header:
+    dnms = pd.read_csv(args.dnmfile, sep="\t", header=0)
+  else:
+    if len(first) != len(EXPECTED_COLS):
+      raise ValueError(
+        f"{args.dnmfile}: no header detected and found {len(first)} "
+        f"tab-separated columns, expected {len(EXPECTED_COLS)}. "
+        f"Columns expected (in order): {EXPECTED_COLS}. "
+        f"First line was: {first}"
+        )
+    print(
+        f"WARNING: no header in {args.dnmfile}; assuming columns in this "
+        f"order: {EXPECTED_COLS}"
+    )
+    dnms = pd.read_csv(
+        args.dnmfile, sep="\t", header=None, names=EXPECTED_COLS,
+    )
 
     with open(args.outfile, "w") as f:
         extra_cols = [
